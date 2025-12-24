@@ -1,4 +1,4 @@
-// systemc_server_final.cpp - COMPLETE SELF-CONTAINED
+// systemc_server_final.cpp - PROPER SystemC version
 #include <systemc>
 #include <iostream>
 #include <vector>
@@ -33,6 +33,8 @@ struct Output {
 
 // CRQA computation function
 void compute_crqa_complete(double R, double* sig1, double* sig2, double results[8]) {
+    cout << "[CRQA] Computing with R=" << R << endl;
+    
     // 1. Normalize
     double mean1 = 0, mean2 = 0;
     for (int i = 0; i < N_SAMPLES; i++) {
@@ -60,6 +62,7 @@ void compute_crqa_complete(double R, double* sig1, double* sig2, double results[
     int len = N_SAMPLES - (m-1)*tau;
     
     if (len <= 0) {
+        cout << "[CRQA] ERROR: len <= 0" << endl;
         for (int i = 0; i < 8; i++) results[i] = 0;
         return;
     }
@@ -180,45 +183,18 @@ void compute_crqa_complete(double R, double* sig1, double* sig2, double results[
     results[5] = DIV;      // divergence
     results[6] = d_ent;    // entropy
     results[7] = LAM;      // laminarity
+    
+    cout << "[CRQA] Results: epsilon=" << DET << " RR=" << RR 
+         << " DET=" << DET << " L=" << v_avg << " L_max=" << d_max
+         << " DIV=" << DIV << " ENTR=" << d_ent << " LAM=" << LAM << endl;
 }
-
-static int recv_eventfd(int sock)
-{
-    struct msghdr msg = {};
-    char buf[CMSG_SPACE(sizeof(int))];
-    char dummy;
-    struct iovec iov = { &dummy, sizeof(dummy) };
-
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = buf;
-    msg.msg_controllen = sizeof(buf);
-
-    if (recvmsg(sock, &msg, 0) < 0) {
-        perror("[SystemC] recvmsg");
-        return -1;
-    }
-
-    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-    if (!cmsg || cmsg->cmsg_type != SCM_RIGHTS) {
-        cerr << "[SystemC] No eventfd received" << endl;
-        return -1;
-    }
-
-    int efd;
-    memcpy(&efd, CMSG_DATA(cmsg), sizeof(int));
-    cout << "[SystemC] Received eventfd = " << efd << endl;
-    return efd;
-}
-
 
 // SystemC module
 SC_MODULE(CRQAServer) {
     SC_CTOR(CRQAServer) {
         SC_THREAD(server_thread);
     }
-    int eventfd = -1; 
-
+    
     void server_thread() {
         cout << "[SystemC] Starting CRQA server..." << endl;
         
@@ -255,9 +231,7 @@ SC_MODULE(CRQAServer) {
         }
         
         cout << "[SystemC] Listening on " << SOCKET_PATH << endl;
-        cout << "[SystemC] Ready for QEMU connections (keeps connection open)" << endl;
-        
-        int connection_count = 0;
+        cout << "[SystemC] Ready for QEMU connections" << endl;
         
         // Main server loop
         while (true) {
@@ -271,22 +245,11 @@ SC_MODULE(CRQAServer) {
                 continue;
             }
             
-            connection_count++;
-            cout << "[SystemC] QEMU connected! (fd=" << cli_fd 
-                 << ", connection #" << connection_count << ")" << endl;
-            cout << "[SystemC] Connection will stay open for multiple requests" << endl;
-            
-            /* receive eventfd ONCE */
-            eventfd = recv_eventfd(cli_fd);
-            if (eventfd < 0) {
-                cerr << "[SystemC] Failed to receive eventfd" << endl;
-                return;
-            }
-
-            int request_count = 0;
-            bool connection_active = true;
+            cout << "[SystemC] QEMU connected! (fd=" << cli_fd << ")" << endl;
+            cout << "[SystemC] Connection will stay open" << endl;
             
             // Handle this connection
+            bool connection_active = true;
             while (connection_active) {
                 Input msg;
                 
@@ -295,7 +258,7 @@ SC_MODULE(CRQAServer) {
                 
                 if (bytes <= 0) {
                     if (bytes == 0) {
-                        cout << "[SystemC] QEMU closed the connection" << endl;
+                        cout << "[SystemC] QEMU closed connection" << endl;
                     } else {
                         cerr << "[SystemC] read() error: " << strerror(errno) << endl;
                     }
@@ -311,10 +274,9 @@ SC_MODULE(CRQAServer) {
                 }
                 
                 if (msg.ready) {
-                    request_count++;
-                    cout << "\n[SystemC] === Processing request #" << request_count << " ===" << endl;
-                    cout << "[SystemC] R = " << msg.R << ", opcode = " << msg.opcode << endl;
-                    cout << "[SystemC] s1[0] = " << msg.sig1[0] << ", s2[0] = " << msg.sig2[0] << endl;
+                    cout << "\n[SystemC] Processing request:" << endl;
+                    cout << "  R = " << msg.R << ", opcode = " << msg.opcode << endl;
+                    cout << "  s1[0] = " << msg.sig1[0] << ", s2[0] = " << msg.sig2[0] << endl;
                     
                     // Compute CRQA
                     Output results;
@@ -327,21 +289,13 @@ SC_MODULE(CRQAServer) {
                         connection_active = false;
                         break;
                     }
+                    
                     cout << "[SystemC] Results sent to QEMU" << endl;
-                    cout << "[SystemC] epsilon=" << results.eps << " RR=" << results.rr 
-                         << " DET=" << results.det << " LAM=" << results.lam << endl;
-                    cout << "[SystemC] Waiting for next request..." << endl;
-		    /*  SIGNAL QEMU */
-		    cout << "now writing on QEMU's shared eventfd" << endl;
-                    uint64_t one = 1;
-                    write(eventfd, &one, sizeof(one)); 
-
-
                 }
             }
             
             close(cli_fd);
-            cout << "[SystemC] Connection #" << connection_count << " closed" << endl;
+            cout << "[SystemC] Connection closed" << endl;
         }
         
         // Cleanup (never reached in practice)
@@ -352,22 +306,23 @@ SC_MODULE(CRQAServer) {
 
 // Global for signal handler
 CRQAServer* g_server = nullptr;
+bool running = true;
 
 void signal_handler(int sig) {
     cout << "\n[SystemC] Received signal " << sig << ", shutting down..." << endl;
+    running = false;
     sc_stop();
 }
-
-
 
 // SystemC main function
 int sc_main(int argc, char* argv[]) {
     cout << "\n==========================================" << endl;
-    cout << "    SystemC CRQA Server - PERSISTENT CONNECTION" << endl;
+    cout << "    SystemC CRQA Server - FINAL VERSION" << endl;
+    cout << "    (No timeouts, keeps connection open)" << endl;
     cout << "==========================================\n" << endl;
     
     // Setup signal handlers
-    //signal(SIGINT, signal_handler);
+    signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
     // Create server

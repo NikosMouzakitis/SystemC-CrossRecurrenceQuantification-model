@@ -1,0 +1,11 @@
+🟢 Option 2B (eventfd-based interrupt) is absolutely perfect.
+
+It gives you:
+
+Real asynchronous acceleration
+
+Real interrupts in the guest
+
+Realistic hardware/software decoupling
+
+No guest stalls during CRQA

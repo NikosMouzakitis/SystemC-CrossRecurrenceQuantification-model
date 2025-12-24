@@ -182,12 +182,43 @@ void compute_crqa_complete(double R, double* sig1, double* sig2, double results[
     results[7] = LAM;      // laminarity
 }
 
+static int recv_eventfd(int sock)
+{
+    struct msghdr msg = {};
+    char buf[CMSG_SPACE(sizeof(int))];
+    char dummy;
+    struct iovec iov = { &dummy, sizeof(dummy) };
+
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = buf;
+    msg.msg_controllen = sizeof(buf);
+
+    if (recvmsg(sock, &msg, 0) < 0) {
+        perror("[SystemC] recvmsg");
+        return -1;
+    }
+
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    if (!cmsg || cmsg->cmsg_type != SCM_RIGHTS) {
+        cerr << "[SystemC] No eventfd received" << endl;
+        return -1;
+    }
+
+    int efd;
+    memcpy(&efd, CMSG_DATA(cmsg), sizeof(int));
+    cout << "[SystemC] Received eventfd = " << efd << endl;
+    return efd;
+}
+
+
 // SystemC module
 SC_MODULE(CRQAServer) {
     SC_CTOR(CRQAServer) {
         SC_THREAD(server_thread);
     }
-    
+    int eventfd = -1; 
+
     void server_thread() {
         cout << "[SystemC] Starting CRQA server..." << endl;
         
@@ -245,6 +276,13 @@ SC_MODULE(CRQAServer) {
                  << ", connection #" << connection_count << ")" << endl;
             cout << "[SystemC] Connection will stay open for multiple requests" << endl;
             
+            /* receive eventfd ONCE */
+            eventfd = recv_eventfd(cli_fd);
+            if (eventfd < 0) {
+                cerr << "[SystemC] Failed to receive eventfd" << endl;
+                return;
+            }
+
             int request_count = 0;
             bool connection_active = true;
             
@@ -289,11 +327,16 @@ SC_MODULE(CRQAServer) {
                         connection_active = false;
                         break;
                     }
-                    
                     cout << "[SystemC] Results sent to QEMU" << endl;
                     cout << "[SystemC] epsilon=" << results.eps << " RR=" << results.rr 
                          << " DET=" << results.det << " LAM=" << results.lam << endl;
                     cout << "[SystemC] Waiting for next request..." << endl;
+		    /*  SIGNAL QEMU */
+		    cout << "now writing on QEMU's shared eventfd" << endl;
+                    uint64_t one = 1;
+                    write(eventfd, &one, sizeof(one)); 
+
+
                 }
             }
             
@@ -315,6 +358,8 @@ void signal_handler(int sig) {
     sc_stop();
 }
 
+
+
 // SystemC main function
 int sc_main(int argc, char* argv[]) {
     cout << "\n==========================================" << endl;
@@ -322,7 +367,7 @@ int sc_main(int argc, char* argv[]) {
     cout << "==========================================\n" << endl;
     
     // Setup signal handlers
-    signal(SIGINT, signal_handler);
+    //signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
     // Create server

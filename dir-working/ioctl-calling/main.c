@@ -15,6 +15,15 @@
 #define SIG2_FILE "systemc_input_F7_T7.txt"
 
 #define N_SAMPLES 512
+#include <time.h>
+#include <stdint.h>
+#include <stdio.h>
+
+static inline uint64_t now_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
 
 /* Function to load signal from file */
 int load_signal_from_file(const char *filename, double *signal, int max_samples) {
@@ -131,7 +140,6 @@ int main(void) {
     double entropy = 0.0;
 
     int i, ret;
-    clock_t start, end;
     double cpu_time_used;
 
     /* Allocate signals and index arrays */
@@ -178,8 +186,9 @@ int main(void) {
         goto cleanup;
     }
 
+    uint64_t start = now_ns();
     /* Fill SIG1 */
-    printf("Filling SIG1 array...\n");
+//    printf("Filling SIG1 array...\n");
     for (i = 0; i < N_SAMPLES; i++) {
         ret = ioctl(fd, IOCTL_SET_SIG1_IDX, &sig1_idx[i]);
         if (ret < 0) {
@@ -195,10 +204,10 @@ int main(void) {
     }
 
     if (ret < 0) goto cleanup;
-    printf("SIG1 array filled successfully.\n");
+ //   printf("SIG1 array filled successfully.\n");
 
     /* Fill SIG2 */
-    printf("Filling SIG2 array...\n");
+  //  printf("Filling SIG2 array...\n");
     for (i = 0; i < N_SAMPLES; i++) {
         ret = ioctl(fd, IOCTL_SET_SIG2_IDX, &sig2_idx[i]);
         if (ret < 0) {
@@ -214,23 +223,21 @@ int main(void) {
     }
 
     if (ret < 0) goto cleanup;
-    printf("SIG2 array filled successfully.\n");
+   // printf("SIG2 array filled successfully.\n");
 
     /* Set opcode - this signals that data is ready */
-    printf("Setting opcode = %d (data ready)\n", opcode);
+///    printf("Setting opcode = %d (data ready)\n", opcode);
     ret = ioctl(fd, IOCTL_SET_OPCODE, &opcode);
     if (ret < 0) {
         perror("IOCTL_SET_OPCODE");
         goto cleanup;
     }
 
-    printf("\n=== Starting CRQA Computation ===\n");
+  //  printf("\n=== Starting CRQA Computation ===\n");
 
-    /* Start timing */
-    start = clock();
 
     /* Read epsilon (triggers computation) */
-    printf("Triggering computation...\n");
+//    printf("Triggering computation...\n");
     ret = ioctl(fd, IOCTL_GET_EPSILON, &epsilon);
     if (ret < 0) {
         perror("IOCTL_GET_EPSILON");
@@ -238,7 +245,7 @@ int main(void) {
     }
 
     /* Small delay to ensure computation completes */
-    usleep(100000); // 100ms delay
+// usleep(5000); // 100ms delay
 
     /* Read all other metrics */
     printf("Reading CRQA metrics...\n");
@@ -264,13 +271,16 @@ int main(void) {
     if (ret < 0) perror("IOCTL_GET_ENTROPY");
 
     /* End timing */
-    end = clock();
-    cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+    
+	uint64_t end = now_ns();
+	double elapsed_ms = (end - start) / 1e6;
 
+	printf("CRQA cycle time = %.3f ms\n", elapsed_ms);
     /* Display results */
     printf("\n=== CRQA Results ===\n");
     printf("Configuration:\n");
     printf("  R = %.3f, N = %d samples\n", R, N_SAMPLES);
+
     printf("  Signal files: %s, %s\n", SIG1_FILE, SIG2_FILE);
     printf("\nMetrics:\n");
     printf("  Epsilon (DET):               %10.6f\n", epsilon);

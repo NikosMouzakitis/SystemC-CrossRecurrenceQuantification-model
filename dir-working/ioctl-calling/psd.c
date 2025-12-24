@@ -126,7 +126,7 @@ static int request_crqa_from_systemc(CpcidevState *s)
     msg.opcode = s->opcode;
     msg.data_ready = s->data_ready;
 
-    printf("CRQAPCI: Sending data to SystemC (R=%f, data_ready=%d)\n", s->R, s->data_ready);
+//    printf("CRQAPCI: Sending data to SystemC (R=%f, data_ready=%d)\n", s->R, s->data_ready);
 
     /* write the message */
     rt = write(s->sockfd, &msg, sizeof(msg));
@@ -159,9 +159,9 @@ static int request_crqa_from_systemc(CpcidevState *s)
     s->divergence = resp.divergence;
     s->entropy = resp.entropy;
 
-    printf("CRQAPCI: Received response from SystemC:\n");
-    printf("  epsilon (DET):         %f\n", s->epsilon);
-    printf("  recurrence_rate (RR):  %f\n", s->recurrence_rate);
+//    printf("CRQAPCI: Received response from SystemC:\n");
+//    printf("  epsilon (DET):         %f\n", s->epsilon);
+//    printf("  recurrence_rate (RR):  %f\n", s->recurrence_rate);
 
     // Close connection after receiving response
     close(s->sockfd);
@@ -174,9 +174,10 @@ static void check_data_ready(CpcidevState *s)
 {
     // Simple check: data is ready when opcode is set and both arrays have non-zero data
     s->data_ready = (s->opcode != 0 && s->sig1_filled && s->sig2_filled);
-    if (s->data_ready) {
+/*    if (s->data_ready) {
         printf("CRQAPCI: Data ready for computation\n");
     }
+*/
 }
 
 static uint64_t cpcidev_mmio_read(void *opaque, hwaddr addr, unsigned size)
@@ -184,8 +185,7 @@ static uint64_t cpcidev_mmio_read(void *opaque, hwaddr addr, unsigned size)
     CpcidevState *s = opaque;
     uint64_t val = 0;
 
-    fprintf(stderr, "CRQAPCI: mmio_read addr=0x%llx size=%u\n",
-            (unsigned long long)addr, size);
+//    fprintf(stderr, "CRQAPCI: mmio_read addr=0x%llx size=%u\n",(unsigned long long)addr, size);
 
     switch (addr) {
         /* Device ID read for verification */
@@ -194,10 +194,10 @@ static uint64_t cpcidev_mmio_read(void *opaque, hwaddr addr, unsigned size)
 
         /* Trigger computation and read epsilon (backward compatibility) */
         case 0x40: {
-            printf("CRQAPCI: Triggering computation...\n");
+ //           printf("CRQAPCI: Triggering computation...\n");
             if (request_crqa_from_systemc(s) == 0) {
                 memcpy(&val, &s->epsilon, sizeof(double));
-                printf("CRQAPCI: Computation successful, epsilon=%f\n", s->epsilon);
+  //              printf("CRQAPCI: Computation successful, epsilon=%f\n", s->epsilon);
             } else {
                 val = 0;
                 printf("CRQAPCI: Computation failed\n");
@@ -246,8 +246,7 @@ static void cpcidev_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned
 {
     CpcidevState *s = opaque;
     
-    fprintf(stderr, "QEMU receives::: CRQAPCI: mmio_write addr=0x%llx raw=0x%016llx size=%u\n",
-            (unsigned long long)addr, (unsigned long long)val, size);
+//    fprintf(stderr, "QEMU receives::: CRQAPCI: mmio_write addr=0x%llx raw=0x%016llx size=%u\n", (unsigned long long)addr, (unsigned long long)val, size);
 
     switch (addr) {
         case 0x08: { /* R (aligned 8-byte slot) */
@@ -260,7 +259,7 @@ static void cpcidev_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned
             double d;
             memcpy(&d, &raw, sizeof(double));
             s->R = d;
-            printf("  -> R set = %f (raw=0x%016llx)\n", s->R, (unsigned long long)raw);
+ //           printf("  -> R set = %f (raw=0x%016llx)\n", s->R, (unsigned long long)raw);
             break;
         }
 
@@ -289,7 +288,7 @@ static void cpcidev_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned
                 // Mark sig1 as filled when we write to index 511
                 if (s->sig1_index == 511) {
                     s->sig1_filled = 1;
-                    printf("  -> SIG1 array filled (512 values)\n");
+//                    printf("  -> SIG1 array filled (512 values)\n");
                 }
             }
             break;
@@ -320,7 +319,7 @@ static void cpcidev_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned
                 // Mark sig2 as filled when we write to index 511
                 if (s->sig2_index == 511) {
                     s->sig2_filled = 1;
-                    printf("  -> SIG2 array filled (512 values)\n");
+ //                   printf("  -> SIG2 array filled (512 values)\n");
                 }
             }
             break;
@@ -328,7 +327,7 @@ static void cpcidev_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned
 
         case 0x38: { /* opcode */
             s->opcode = (uint32_t)val;
-            printf("  -> opcode = %u\n", s->opcode);
+//            printf("  -> opcode = %u\n", s->opcode);
             
             // When opcode is set, check if data is ready
             check_data_ready(s);
@@ -359,7 +358,7 @@ static void pci_cpcidev_realize(PCIDevice *pdev, Error **errp)
     CpcidevState *s = CPCIDEV(pdev);
 
     uint8_t *pci_conf = pdev->config;
-    printf("CRQAPCI_REALIZE: pid=%d\n", (int)getpid());
+//    printf("CRQAPCI_REALIZE: pid=%d\n", (int)getpid());
 
     pci_config_set_interrupt_pin(pci_conf, 1);
     if (msi_init(pdev, 0, 1, true, false, errp)) {

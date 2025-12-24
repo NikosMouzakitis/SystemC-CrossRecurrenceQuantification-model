@@ -1,301 +1,209 @@
-/* main.c - userspace program with proper reset between runs */
+// main_smart.c - Smart DMA handling
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <errno.h>
+#include <sys/mman.h>
 #include <string.h>
 #include <time.h>
-#include <math.h>
-#include "crqa_ioctl.h"
-#define DEVICE "/dev/cpcidev_pci"
-#define SIG1_FILE "systemc_input_FP1_F7.txt"
-#define SIG2_FILE "systemc_input_F7_T7.txt"
+#include <errno.h>
+#include <poll.h>
 
-#define N_SAMPLES 512
+static inline uint64_t now_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+#define DMA_OFFSET    0x10000
+#define TRIGGER_REG   0x1000
+#define TRIGGER_MAGIC 0xDEADBEEFDEADBEEFULL
+#define N_SAMPLES     512
 
-/* Function to load signal from file */
-int load_signal_from_file(const char *filename, double *signal, int max_samples) {
+static int load_signal_from_file(const char *filename, double *signal, int max_samples) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        fprintf(stderr, "Error opening file %s: %s\n", filename, strerror(errno));
+        fprintf(stderr, "Error opening %s: %s\n", filename, strerror(errno));
         return -1;
     }
-
-    int count = 0;
+    
+    int i = 0;
     char line[256];
-
-    while (count < max_samples && fgets(line, sizeof(line), fp)) {
-        // Skip empty lines and comments
-        if (line[0] == '\n' || line[0] == '#')
-            continue;
-
-        double value;
-        if (sscanf(line, "%lf", &value) == 1) {
-            signal[count] = value;
-            count++;
-        }
+    while (fgets(line, sizeof(line), fp) && i < max_samples) {
+        if (line[0] == '\n' || line[0] == '#') continue;
+        char *endptr;
+        double value = strtod(line, &endptr);
+        if (endptr != line) signal[i++] = value;
     }
-
     fclose(fp);
-
-    if (count < max_samples) {
-        fprintf(stderr, "Warning: File %s only contains %d values (expected %d)\n",
-                filename, count, max_samples);
-        // Fill remaining with zeros
-        for (int i = count; i < max_samples; i++) {
-            signal[i] = 0.0;
-        }
-    }
-
-    printf("Loaded %d samples from %s\n", count, filename);
-    return count;
-}
-
-/* Function to print signal statistics */
-void print_signal_stats(const char *name, double *signal, int n) {
-    double min = signal[0];
-    double max = signal[0];
-    double sum = 0.0;
-
-    for (int i = 0; i < n; i++) {
-        if (signal[i] < min) min = signal[i];
-        if (signal[i] > max) max = signal[i];
-        sum += signal[i];
-    }
-
-    double mean = sum / n;
-    double var = 0.0;
-    for (int i = 0; i < n; i++) {
-        double diff = signal[i] - mean;
-        var += diff * diff;
-    }
-    var /= n;
-    double stddev = sqrt(var);
-
-    printf("%s: min=%.4f, max=%.4f, mean=%.4f, stddev=%.4f\n",
-           name, min, max, mean, stddev);
-}
-
-/* Function to reset device state between runs */
-void reset_device_state(int fd) {
-    printf("Resetting device state...\n");
-
-    // Set R to 0
-    double zero_R = 0.0;
-    ioctl(fd, IOCTL_SET_R, &zero_R);
-
-    // Set all signal values to 0
-    int zero_idx = 0;
-    double zero_val = 0.0;
-
-    for (int i = 0; i < N_SAMPLES; i++) {
-        ioctl(fd, IOCTL_SET_SIG1_IDX, &zero_idx);
-        ioctl(fd, IOCTL_SET_SIG1_VAL, &zero_val);
-
-        ioctl(fd, IOCTL_SET_SIG2_IDX, &zero_idx);
-        ioctl(fd, IOCTL_SET_SIG2_VAL, &zero_val);
-    }
-
-    // Set opcode to 0
-    int zero_opcode = 0;
-    ioctl(fd, IOCTL_SET_OPCODE, &zero_opcode);
-
-    printf("Device reset complete\n");
-}
-
-int main(void) {
-    int fd = open(DEVICE, O_RDWR);
-    if (fd < 0) {
-        perror("open");
-        return 1;
-    }
-
-    double R = 0.15;
-    int opcode = 42;
-    double *sig1 = NULL;
-    double *sig2 = NULL;
-    uint32_t *sig1_idx = NULL;
-    uint32_t *sig2_idx = NULL;
-
-    /* Variables for all CRQA metrics */
-    double epsilon = 0.0;
-    double recurrence_rate = 0.0;
-    double determinism = 0.0;
-    double laminarity = 0.0;
-    double trapping_time = 0.0;
-    double max_diag_line = 0.0;
-    double divergence = 0.0;
-    double entropy = 0.0;
-
-    int i, ret;
-    clock_t start, end;
-    double cpu_time_used;
-
-    /* Allocate signals and index arrays */
-    sig1 = malloc(N_SAMPLES * sizeof(double));
-    sig2 = malloc(N_SAMPLES * sizeof(double));
-    sig1_idx = malloc(N_SAMPLES * sizeof(uint32_t));
-    sig2_idx = malloc(N_SAMPLES * sizeof(uint32_t));
-
-    if (!sig1 || !sig2 || !sig1_idx || !sig2_idx) {
-        fprintf(stderr, "malloc failed\n");
-        goto cleanup;
-    }
-
-    printf("=== CRQA PCI Device Test ===\n");
-
-    /* Reset device first to clear any previous state */
-    reset_device_state(fd);
-
-    /* Load signals from files */
-    printf("Loading signals from files...\n");
-    int loaded1 = load_signal_from_file(SIG1_FILE, sig1, N_SAMPLES);
-    int loaded2 = load_signal_from_file(SIG2_FILE, sig2, N_SAMPLES);
-
-    if (loaded1 < 0 || loaded2 < 0) {
-        fprintf(stderr, "Failed to load signal files\n");
-        goto cleanup;
-    }
-
-    /* Initialize index arrays */
-    for (i = 0; i < N_SAMPLES; i++) {
-        sig1_idx[i] = i;
-        sig2_idx[i] = i;
-    }
-
-    /* Print signal statistics */
-    print_signal_stats("Signal 1", sig1, N_SAMPLES);
-    print_signal_stats("Signal 2", sig2, N_SAMPLES);
-
-    /* Set R */
-    printf("\nSetting R = %f\n", R);
-    ret = ioctl(fd, IOCTL_SET_R, &R);
-    if (ret < 0) {
-        perror("IOCTL_SET_R");
-        goto cleanup;
-    }
-
-    /* Fill SIG1 */
-    printf("Filling SIG1 array...\n");
-    for (i = 0; i < N_SAMPLES; i++) {
-        ret = ioctl(fd, IOCTL_SET_SIG1_IDX, &sig1_idx[i]);
-        if (ret < 0) {
-            perror("IOCTL_SET_SIG1_IDX");
-            break;
-        }
-
-        ret = ioctl(fd, IOCTL_SET_SIG1_VAL, &sig1[i]);
-        if (ret < 0) {
-            perror("IOCTL_SET_SIG1_VAL");
-            break;
-        }
-    }
-
-    if (ret < 0) goto cleanup;
-    printf("SIG1 array filled successfully.\n");
-
-    /* Fill SIG2 */
-    printf("Filling SIG2 array...\n");
-    for (i = 0; i < N_SAMPLES; i++) {
-        ret = ioctl(fd, IOCTL_SET_SIG2_IDX, &sig2_idx[i]);
-        if (ret < 0) {
-            perror("IOCTL_SET_SIG2_IDX");
-            break;
-        }
-
-        ret = ioctl(fd, IOCTL_SET_SIG2_VAL, &sig2[i]);
-        if (ret < 0) {
-            perror("IOCTL_SET_SIG2_VAL");
-            break;
-        }
-    }
-
-    if (ret < 0) goto cleanup;
-    printf("SIG2 array filled successfully.\n");
-
-    /* Set opcode - this signals that data is ready */
-    printf("Setting opcode = %d (data ready)\n", opcode);
-    ret = ioctl(fd, IOCTL_SET_OPCODE, &opcode);
-    if (ret < 0) {
-        perror("IOCTL_SET_OPCODE");
-        goto cleanup;
-    }
-
-    printf("\n=== Starting CRQA Computation ===\n");
-
-    /* Start timing */
-    start = clock();
-
-    /* Read epsilon (triggers computation) */
-    printf("Triggering computation...\n");
-    ret = ioctl(fd, IOCTL_GET_EPSILON, &epsilon);
-    if (ret < 0) {
-        perror("IOCTL_GET_EPSILON");
-        goto cleanup;
-    }
-
-    /* Small delay to ensure computation completes */
-    usleep(100000); // 100ms delay
-
-    /* Read all other metrics */
-    printf("Reading CRQA metrics...\n");
-    ret = ioctl(fd, IOCTL_GET_RECURRENCE_RATE, &recurrence_rate);
-    if (ret < 0) perror("IOCTL_GET_RECURRENCE_RATE");
-
-    ret = ioctl(fd, IOCTL_GET_DETERMINISM, &determinism);
-    if (ret < 0) perror("IOCTL_GET_DETERMINISM");
-
-    ret = ioctl(fd, IOCTL_GET_LAMINARITY, &laminarity);
-    if (ret < 0) perror("IOCTL_GET_LAMINARITY");
-
-    ret = ioctl(fd, IOCTL_GET_TRAPPING_TIME, &trapping_time);
-    if (ret < 0) perror("IOCTL_GET_TRAPPING_TIME");
-
-    ret = ioctl(fd, IOCTL_GET_MAX_DIAG_LINE, &max_diag_line);
-    if (ret < 0) perror("IOCTL_GET_MAX_DIAG_LINE");
-
-    ret = ioctl(fd, IOCTL_GET_DIVERGENCE, &divergence);
-    if (ret < 0) perror("IOCTL_GET_DIVERGENCE");
-
-    ret = ioctl(fd, IOCTL_GET_ENTROPY, &entropy);
-    if (ret < 0) perror("IOCTL_GET_ENTROPY");
-
-    /* End timing */
-    end = clock();
-    cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
-
-    /* Display results */
-    printf("\n=== CRQA Results ===\n");
-    printf("Configuration:\n");
-    printf("  R = %.3f, N = %d samples\n", R, N_SAMPLES);
-    printf("  Signal files: %s, %s\n", SIG1_FILE, SIG2_FILE);
-    printf("\nMetrics:\n");
-    printf("  Epsilon (DET):               %10.6f\n", epsilon);
-    printf("  Recurrence Rate (RR):        %10.6f\n", recurrence_rate);
-    printf("  Determinism (DET):           %10.6f\n", determinism);
-    printf("  Laminarity (LAM):            %10.6f\n", laminarity);
-    printf("  Trapping Time (TT):          %10.6f\n", trapping_time);
-    printf("  Max Diagonal Line (MAXL):    %10.6f\n", max_diag_line);
-    printf("  Divergence (DIV):            %10.6f\n", divergence);
-    printf("  Entropy (ENTR):              %10.6f\n", entropy);
-    printf("\nPerformance:\n");
-    printf("  Total time: %.3f seconds\n", cpu_time_used);
-    printf("============================\n");
-
-cleanup:
-    /* Cleanup */
-    if (sig1) free(sig1);
-    if (sig2) free(sig2);
-    if (sig1_idx) free(sig1_idx);
-    if (sig2_idx) free(sig2_idx);
-
-    if (fd >= 0) close(fd);
-
-    if (ret < 0) {
-        return 1;
-    }
+    
+    for (; i < max_samples; i++) signal[i] = 0.0;
+    printf("Loaded %d samples from %s\n", i, filename);
     return 0;
+}
+
+int main(int argc, char *argv[]) {
+    const char *sig1_file = "systemc_input_F7_T7.txt";
+    const char *sig2_file = "systemc_input_FP1_F7.txt";
+    
+    if (argc >= 3) {
+        sig1_file = argv[1];
+        sig2_file = argv[2];
+    }
+    
+    double sig1[N_SAMPLES], sig2[N_SAMPLES];
+    
+    printf("Loading signals...\n");
+    if (load_signal_from_file(sig1_file, sig1, N_SAMPLES) < 0 ||
+        load_signal_from_file(sig2_file, sig2, N_SAMPLES) < 0) {
+        return 1;
+    }
+    
+    // Open device
+    int fd = open("/dev/cpcidev_pci", O_RDWR);
+    if (fd < 0) { 
+        perror("open /dev/cpcidev_pci");
+        return 1; 
+    }
+    
+    // Map memory
+    void *base = mmap(NULL, 2*1024*1024, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    if (base == MAP_FAILED) { 
+        perror("mmap");
+        close(fd);
+        return 1; 
+    }
+    
+    uint8_t *dma = (uint8_t*)base + DMA_OFFSET;
+    volatile uint64_t *trigger = (volatile uint64_t*)((uint8_t*)base + TRIGGER_REG);
+    
+    // **KEY: Read current state and determine next ID**
+    uint64_t current_id = *(uint64_t*)(dma + 16);
+    printf("\nCurrent DMA state:\n");
+    printf("  ID in DMA: %lu\n", current_id);
+    printf("  R value: %f\n", *(double*)dma);
+    printf("  Opcode: %u\n", *(uint32_t*)(dma + 8));
+    
+    // Determine what ID to use
+    uint64_t use_id;
+    if (current_id == 0) {
+        // Fresh DMA - start with 1
+        use_id = 1;
+        printf("DMA appears fresh, starting with ID=1\n");
+    } else {
+        // DMA has previous state - use current ID
+        use_id = current_id;
+        printf("Using existing ID=%lu from DMA\n", use_id);
+    }
+    
+    // Optional: Wait for any previous computation to complete
+    printf("Checking if previous computation is in progress...\n");
+    int check_timeout = 100; // 100ms
+    while (*(uint64_t*)(dma + 16) != use_id && check_timeout-- > 0) {
+        printf("  Waiting for ID to stabilize... (current: %lu, expected: %lu)\n", 
+               *(uint64_t*)(dma + 16), use_id);
+        usleep(1000);
+    }
+    
+    // Write our parameters
+    printf("\nSetting up computation:\n");
+    printf("  R = 0.15\n");
+    printf("  Opcode = 42\n");
+    printf("  ID = %lu\n", use_id);
+   
+
+
+    uint64_t start = now_ns();
+
+    *(double*)dma = 0.15;
+    *(uint32_t*)(dma + 8) = 42;
+    *(uint64_t*)(dma + 16) = use_id;
+    
+    // Copy signals
+    memcpy(dma + 24, sig1, sizeof(sig1));
+    memcpy(dma + 24 + sizeof(sig1), sig2, sizeof(sig2));
+    
+    // Memory barrier
+    asm volatile("fence w,w" ::: "memory");
+    // Trigger computation
+    printf("\nSending trigger...\n");
+    *trigger = TRIGGER_MAGIC;
+    asm volatile("fence w,w" ::: "memory");
+    
+    // Wait for completion (ID should increment)
+    //printf("Waiting for computation (ID should change from %lu)...\n", use_id);
+    
+    int timeout = 0;
+    int max_timeout = 10000; // 10 seconds
+    
+    uint64_t start_id = use_id;
+    /*
+    while (*(uint64_t*)(dma + 16) == start_id) {
+        usleep(1000);
+        timeout++;
+        
+        // Progress indicator
+        if (timeout % 1000 == 0) {
+            printf("  Waiting... (%d ms)\n", timeout);
+        }
+        
+        if (timeout > max_timeout) {
+            printf("\nTIMEOUT: Computation not completed after %d ms\n", timeout);
+            printf("Current ID: %lu (still same as start)\n", *(uint64_t*)(dma + 16));
+            break;
+        }
+    }
+    */ 
+    // Check results
+     struct pollfd pfd = {
+	.fd = fd,
+	.events = POLLIN
+	};
+     printf("waiting for CRQA completion\n");
+    
+     poll(&pfd, 1, -1);
+
+
+    uint64_t final_id = *(uint64_t*)(dma + 16);
+    if (final_id != start_id) {
+	
+	uint64_t end = now_ns();
+	double elapsed_ms = (end - start) / 1e6;
+	printf("CRQA cycle time = %.3f ms\n", elapsed_ms);
+
+        double *res = (double*)(dma + 24 + 8192);
+        printf("\n=== COMPUTATION COMPLETE ===\n");
+        printf("ID changed: %lu -> %lu\n", start_id, final_id);
+        printf("Execution time: %d ms\n", timeout);
+        printf("\n=== CRQA RESULTS ===\n");
+        printf("Epsilon = %.6f\n", res[0]);
+        printf("RR      = %.6f\n", res[1]);
+        printf("DET     = %.6f\n", res[2]);
+        printf("L       = %.6f\n", res[3]);
+        printf("L_max   = %.6f\n", res[4]);
+        printf("DIV     = %.6f\n", res[5]);
+        printf("ENTR    = %.6f\n", res[6]);
+        printf("LAM     = %.6f\n", res[7]);
+        
+        // Save the final state for next run
+        printf("\nNext run should use ID = %lu\n", final_id);
+    } else {
+        printf("\nCOMPUTATION FAILED\n");
+        printf("ID unchanged: %lu\n", final_id);
+        printf("Possible issues:\n");
+        printf("  1. SystemC server not running\n");
+        printf("  2. QEMU device not loaded\n");
+        printf("  3. Socket connection failed\n");
+        
+        // Try to diagnose
+        printf("\nDebug info:\n");
+        printf("  Trigger register: 0x%lx\n", *trigger);
+        printf("  DMA ID field: %lu\n", final_id);
+    }
+    
+    // Cleanup
+    munmap(base, 2*1024*1024);
+    close(fd);
+    
+    return (final_id != start_id) ? 0 : 1;
 }

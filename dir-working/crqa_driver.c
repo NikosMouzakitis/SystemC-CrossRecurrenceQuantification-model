@@ -1,264 +1,128 @@
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/pci.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
-#include <linux/uaccess.h>
 #include <linux/io.h>
-#include "crqa_ioctl.h" 
-#define BAR0 0
+#include <linux/mm.h>
+#include <linux/device.h>
+
 #define CDEV_NAME "cpcidev_pci"
 #define QEMU_VENDOR_ID 0x1234
 #define QEMU_DEVICE_ID 0xdada
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Nikos Mouzakitis");
-MODULE_DESCRIPTION("Linux driver for QEMU CRQA PCI device");
-
-static struct pci_device_id pci_ids[] = {
-    { PCI_DEVICE(QEMU_VENDOR_ID, QEMU_DEVICE_ID) },
-    { 0, }
-};
-MODULE_DEVICE_TABLE(pci, pci_ids);
-
 static struct pci_dev *pdev_global;
-static void __iomem *mmio_base;
-static int major;
-static struct class *cpcidev_class;
-static struct device *cpcidev_device;
+static dev_t dev_num;
+static struct class *dev_class;
+static struct device *dev_device;
+static struct cdev cdev;
 
-static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+static int crqa_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-    int idx;
-    double value;
-    u64 raw;
-    void __user *uarg = (void __user *)arg;
+    resource_size_t start = pci_resource_start(pdev_global, 0);
+    unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+    unsigned long size = vma->vm_end - vma->vm_start;
 
-    switch (cmd) {
-        case IOCTL_SET_R:
-            /* copy double from user and write to offset 0x08 */
-            if (copy_from_user(&value, uarg, sizeof(double)))
-                return -EFAULT;
-            memcpy(&raw, &value, sizeof(double));
-            iowrite64(raw, mmio_base + 0x08);
-            pr_info("cpcidev: IOCTL_SET_R value=%f raw=0x%016llx\n", 
-                    value, (unsigned long long)raw);
-            break;
+    if (offset + size > 2*1024*1024) return -EINVAL;
 
-        case IOCTL_SET_SIG1_IDX:
-            if (copy_from_user(&idx, uarg, sizeof(int)))
-                return -EFAULT;
-            iowrite32(idx, mmio_base + 0x18);
-            pr_info("cpcidev: IOCTL_SET_SIG1_IDX idx=%d\n", idx);
-            break;
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
-        case IOCTL_SET_SIG1_VAL:
-            if (copy_from_user(&value, uarg, sizeof(double)))
-                return -EFAULT;
-            memcpy(&raw, &value, sizeof(double));
-            iowrite64(raw, mmio_base + 0x20);
-            pr_info("cpcidev: IOCTL_SET_SIG1_VAL value=%f\n", value);
-            break;
-
-        case IOCTL_SET_SIG2_IDX:
-            if (copy_from_user(&idx, uarg, sizeof(int)))
-                return -EFAULT;
-            iowrite32(idx, mmio_base + 0x28);
-            pr_info("cpcidev: IOCTL_SET_SIG2_IDX idx=%d\n", idx);
-            break;
-
-        case IOCTL_SET_SIG2_VAL:
-            if (copy_from_user(&value, uarg, sizeof(double)))
-                return -EFAULT;
-            memcpy(&raw, &value, sizeof(double));
-            iowrite64(raw, mmio_base + 0x30);
-            pr_info("cpcidev: IOCTL_SET_SIG2_VAL value=%f\n", value);
-            break;
-
-        case IOCTL_SET_OPCODE:
-            if (copy_from_user(&idx, uarg, sizeof(int)))
-                return -EFAULT;
-            iowrite32(idx, mmio_base + 0x38);
-            pr_info("cpcidev: IOCTL_SET_OPCODE opcode=%d\n", idx);
-            break;
-
-        case IOCTL_GET_EPSILON:
-            /* Read from 0x40 triggers computation and returns epsilon */
-            raw = ioread64(mmio_base + 0x40);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_EPSILON value=%f\n", value);
-            break;
-
-        case IOCTL_GET_RECURRENCE_RATE:
-            raw = ioread64(mmio_base + 0x48);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_RECURRENCE_RATE value=%f\n", value);
-            break;
-
-        case IOCTL_GET_DETERMINISM:
-            raw = ioread64(mmio_base + 0x50);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_DETERMINISM value=%f\n", value);
-            break;
-
-        case IOCTL_GET_LAMINARITY:
-            raw = ioread64(mmio_base + 0x58);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_LAMINARITY value=%f\n", value);
-            break;
-
-        case IOCTL_GET_TRAPPING_TIME:
-            raw = ioread64(mmio_base + 0x60);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_TRAPPING_TIME value=%f\n", value);
-            break;
-
-        case IOCTL_GET_MAX_DIAG_LINE:
-            raw = ioread64(mmio_base + 0x68);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_MAX_DIAG_LINE value=%f\n", value);
-            break;
-
-        case IOCTL_GET_DIVERGENCE:
-            raw = ioread64(mmio_base + 0x70);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_DIVERGENCE value=%f\n", value);
-            break;
-
-        case IOCTL_GET_ENTROPY:
-            raw = ioread64(mmio_base + 0x78);
-            memcpy(&value, &raw, sizeof(double));
-            if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
-                return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_ENTROPY value=%f\n", value);
-            break;
-
-        default:
-            pr_info("cpcidev: Unknown ioctl command: 0x%x\n", cmd);
-            return -EINVAL;
-    }
-
-    return 0;
+    return remap_pfn_range(vma, vma->vm_start, (start + offset) >> PAGE_SHIFT, size, vma->vm_page_prot);
 }
 
-static ssize_t cpcidev_read(struct file *filp, char __user *buf,
-                            size_t len, loff_t *off)
-{
-    return -EINVAL; // not used
-}
-
-static ssize_t cpcidev_write(struct file *filp, const char __user *buf,
-                             size_t len, loff_t *off)
-{
-    return -EINVAL; // not used
-}
-
-static struct file_operations fops = {
+static const struct file_operations fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = cpcidev_ioctl,
-    .read  = cpcidev_read,
-    .write = cpcidev_write,
+    .mmap  = crqa_mmap,
 };
+/* MSI interrupt handler */
+static irqreturn_t crqa_irq_handler(int irq, void *dev_id)
+{
+    struct cdev *dev = dev_id;
+    pr_info("PSD MSI interrupt received on IRQ %d\n", irq);
 
-static int cpcidev_probe(struct pci_dev *pdev,
-                         const struct pci_device_id *id)
+    /* Acknowledge or handle the interrupt here */
+
+    return IRQ_HANDLED;
+}
+
+static int crqa_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
     int ret;
-    resource_size_t mmio_start, mmio_len;
 
     ret = pci_enable_device(pdev);
-    if (ret) {
-        dev_err(&pdev->dev, "pci_enable_device failed\n");
-        return ret;
-    }
+    if (ret) return ret;
 
-    ret = pci_request_region(pdev, BAR0, "cpcidev_mmio");
-    if (ret) {
-        dev_err(&pdev->dev, "pci_request_region failed\n");
-        return ret;
-    }
-
-    mmio_start = pci_resource_start(pdev, BAR0);
-    mmio_len   = pci_resource_len(pdev, BAR0);
-    mmio_base  = pci_iomap(pdev, BAR0, mmio_len);
-    if (!mmio_base) {
-        dev_err(&pdev->dev, "pci_iomap failed\n");
-        pci_release_region(pdev, BAR0);
-        return -ENOMEM;
-    }
+    ret = pci_request_region(pdev, 0, "crqa");
+    if (ret) goto err_disable;
 
     pdev_global = pdev;
-    major = register_chrdev(0, CDEV_NAME, &fops);
-    if (major < 0) {
-        dev_err(&pdev->dev, "register_chrdev failed\n");
-        pci_iounmap(pdev, mmio_base);
-        pci_release_region(pdev, BAR0);
-        return major;
-    }
+
+    dev_class = class_create("crqa");
+    if (IS_ERR(dev_class)) { ret = PTR_ERR(dev_class); goto err_region; }
+
+    ret = alloc_chrdev_region(&dev_num, 0, 1, CDEV_NAME);
+    if (ret) goto err_class;
+
+    cdev_init(&cdev, &fops);
+    ret = cdev_add(&cdev, dev_num, 1);
+    if (ret) goto err_chrdev;
+
+    dev_device = device_create(dev_class, &pdev->dev, dev_num, NULL, CDEV_NAME);
+    if (IS_ERR(dev_device)) { ret = PTR_ERR(dev_device); goto err_cdev; }
     
-    // create /dev node
-    cpcidev_class = class_create(CDEV_NAME);
-    if (IS_ERR(cpcidev_class)) {
-        unregister_chrdev(major, CDEV_NAME);
-        pci_iounmap(pdev, mmio_base);
-        pci_release_region(pdev, BAR0);
-        return PTR_ERR(cpcidev_class);
+    ret = pci_enable_msi(pdev);
+    if (ret) {
+        dev_warn(&pdev->dev, "MSI not available, falling back to legacy IRQ\n");
+    }
+    printk(KERN_ALERT"LKM: ret: %d  Success pci enable MSI\n", ret);
+
+    ret = request_irq(pdev->irq, crqa_irq_handler, 0, "crqa_pci", pdev);
+    if (ret)
+    {
+	printk(KERN_INFO "error requesting MSI,,,,\n");
     }
 
-    cpcidev_device = device_create(cpcidev_class, &pdev->dev,
-                       MKDEV(major, 0), NULL, CDEV_NAME);
-    if (IS_ERR(cpcidev_device)) {
-        class_destroy(cpcidev_class);
-        unregister_chrdev(major, CDEV_NAME);
-        pci_iounmap(pdev, mmio_base);
-        pci_release_region(pdev, BAR0);
-        return PTR_ERR(cpcidev_device);
-    }
 
-    dev_info(&pdev->dev, "cpcidev_pci registered major=%d\n", major);
-
+    dev_info(&pdev->dev, "CRQA zero-copy device ready\n");
     return 0;
+
+err_cdev:
+    cdev_del(&cdev);
+err_chrdev:
+    unregister_chrdev_region(dev_num, 1);
+err_class:
+    class_destroy(dev_class);
+err_region:
+    pci_release_region(pdev, 0);
+err_disable:
+    pci_disable_device(pdev);
+    return ret;
 }
 
-static void cpcidev_remove(struct pci_dev *pdev)
+static void crqa_remove(struct pci_dev *pdev)
 {
-    device_destroy(cpcidev_class, MKDEV(major, 0));
-    class_destroy(cpcidev_class);
-    unregister_chrdev(major, CDEV_NAME);
-    pci_iounmap(pdev, mmio_base);
-    pci_release_region(pdev, BAR0);
+    device_destroy(dev_class, dev_num);
+    cdev_del(&cdev);
+    unregister_chrdev_region(dev_num, 1);
+    class_destroy(dev_class);
+    pci_release_region(pdev, 0);
+    pci_disable_device(pdev);
 }
 
-static struct pci_driver cpcidev_driver = {
-    .name     = "cpcidev_driver",
-    .id_table = pci_ids,
-    .probe    = cpcidev_probe,
-    .remove   = cpcidev_remove,
+static const struct pci_device_id crqa_ids[] = {
+    { PCI_DEVICE(QEMU_VENDOR_ID, QEMU_DEVICE_ID) },
+    { 0 }
+};
+MODULE_DEVICE_TABLE(pci, crqa_ids);
+
+static struct pci_driver crqa_driver = {
+    .name     = "crqa_pci",
+    .id_table = crqa_ids,
+    .probe    = crqa_probe,
+    .remove   = crqa_remove,
 };
 
-static int __init cpcidev_init(void)
-{
-    return pci_register_driver(&cpcidev_driver);
-}
+module_pci_driver(crqa_driver);
 
-static void __exit cpcidev_exit(void)
-{
-    pci_unregister_driver(&cpcidev_driver);
-}
-
-module_init(cpcidev_init);
-module_exit(cpcidev_exit);
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("You");
+MODULE_DESCRIPTION("Zero-copy CRQA PCI device - single BAR");

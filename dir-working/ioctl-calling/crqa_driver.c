@@ -41,15 +41,14 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
                 return -EFAULT;
             memcpy(&raw, &value, sizeof(double));
             iowrite64(raw, mmio_base + 0x08);
-            pr_info("cpcidev: IOCTL_SET_R value=%f raw=0x%016llx\n", 
-                    value, (unsigned long long)raw);
+//            pr_info("cpcidev: IOCTL_SET_R value=%f raw=0x%016llx\n",  value, (unsigned long long)raw);
             break;
 
         case IOCTL_SET_SIG1_IDX:
             if (copy_from_user(&idx, uarg, sizeof(int)))
                 return -EFAULT;
             iowrite32(idx, mmio_base + 0x18);
-            pr_info("cpcidev: IOCTL_SET_SIG1_IDX idx=%d\n", idx);
+//            pr_info("cpcidev: IOCTL_SET_SIG1_IDX idx=%d\n", idx);
             break;
 
         case IOCTL_SET_SIG1_VAL:
@@ -57,14 +56,14 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
                 return -EFAULT;
             memcpy(&raw, &value, sizeof(double));
             iowrite64(raw, mmio_base + 0x20);
-            pr_info("cpcidev: IOCTL_SET_SIG1_VAL value=%f\n", value);
+ //           pr_info("cpcidev: IOCTL_SET_SIG1_VAL value=%f\n", value);
             break;
 
         case IOCTL_SET_SIG2_IDX:
             if (copy_from_user(&idx, uarg, sizeof(int)))
                 return -EFAULT;
             iowrite32(idx, mmio_base + 0x28);
-            pr_info("cpcidev: IOCTL_SET_SIG2_IDX idx=%d\n", idx);
+//            pr_info("cpcidev: IOCTL_SET_SIG2_IDX idx=%d\n", idx);
             break;
 
         case IOCTL_SET_SIG2_VAL:
@@ -72,14 +71,14 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
                 return -EFAULT;
             memcpy(&raw, &value, sizeof(double));
             iowrite64(raw, mmio_base + 0x30);
-            pr_info("cpcidev: IOCTL_SET_SIG2_VAL value=%f\n", value);
+ //           pr_info("cpcidev: IOCTL_SET_SIG2_VAL value=%f\n", value);
             break;
 
         case IOCTL_SET_OPCODE:
             if (copy_from_user(&idx, uarg, sizeof(int)))
                 return -EFAULT;
             iowrite32(idx, mmio_base + 0x38);
-            pr_info("cpcidev: IOCTL_SET_OPCODE opcode=%d\n", idx);
+//            pr_info("cpcidev: IOCTL_SET_OPCODE opcode=%d\n", idx);
             break;
 
         case IOCTL_GET_EPSILON:
@@ -88,7 +87,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_EPSILON value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_EPSILON value=%f\n", value);
             break;
 
         case IOCTL_GET_RECURRENCE_RATE:
@@ -96,7 +95,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_RECURRENCE_RATE value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_RECURRENCE_RATE value=%f\n", value);
             break;
 
         case IOCTL_GET_DETERMINISM:
@@ -104,7 +103,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_DETERMINISM value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_DETERMINISM value=%f\n", value);
             break;
 
         case IOCTL_GET_LAMINARITY:
@@ -112,7 +111,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_LAMINARITY value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_LAMINARITY value=%f\n", value);
             break;
 
         case IOCTL_GET_TRAPPING_TIME:
@@ -120,7 +119,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_TRAPPING_TIME value=%f\n", value);
+ //           pr_info("cpcidev: IOCTL_GET_TRAPPING_TIME value=%f\n", value);
             break;
 
         case IOCTL_GET_MAX_DIAG_LINE:
@@ -128,7 +127,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_MAX_DIAG_LINE value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_MAX_DIAG_LINE value=%f\n", value);
             break;
 
         case IOCTL_GET_DIVERGENCE:
@@ -136,7 +135,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_DIVERGENCE value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_DIVERGENCE value=%f\n", value);
             break;
 
         case IOCTL_GET_ENTROPY:
@@ -144,7 +143,7 @@ static long cpcidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
             memcpy(&value, &raw, sizeof(double));
             if (copy_to_user((double __user *)uarg, &value, sizeof(double)))
                 return -EFAULT;
-            pr_info("cpcidev: IOCTL_GET_ENTROPY value=%f\n", value);
+//            pr_info("cpcidev: IOCTL_GET_ENTROPY value=%f\n", value);
             break;
 
         default:
